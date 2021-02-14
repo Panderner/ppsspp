@@ -125,7 +125,7 @@ struct PPGeTextDrawerImage {
 	TextStringEntry entry;
 	u32 ptr;
 };
-std::map<PPGeTextDrawerCacheKey, PPGeTextDrawerImage> textDrawerImages;
+static std::map<PPGeTextDrawerCacheKey, PPGeTextDrawerImage> textDrawerImages;
 
 void PPGeSetDrawContext(Draw::DrawContext *draw) {
 	g_draw = draw;
@@ -140,6 +140,8 @@ void PPGePrepareText(const char *text, float x, float y, PPGeAlign align, float 
 // Draw currently buffered text using the state from PPGeGetTextBoundingBox() call.
 // Clears the buffer and state when done.
 void PPGeDrawCurrentText(u32 color = 0xFFFFFFFF);
+
+static void PPGeDecimateTextImages(int age = 97);
 
 void PPGeSetTexture(u32 dataAddr, int width, int height);
 
@@ -364,6 +366,10 @@ void __PPGeShutdown()
 
 	delete textDrawer;
 	textDrawer = nullptr;
+
+	for (auto im : textDrawerImages)
+		kernelMemory.Free(im.second.ptr);
+	textDrawerImages.clear();
 }
 
 void PPGeBegin()
@@ -906,6 +912,18 @@ static void PPGeDrawTextImage(PPGeTextDrawerImage im, float x, float y, const PP
 	PPGeSetDefaultTexture();
 }
 
+static void PPGeDecimateTextImages(int age) {
+	// Do this always, in case the platform has no TextDrawer but save state did.
+	for (auto it = textDrawerImages.begin(); it != textDrawerImages.end(); ) {
+		if (gpuStats.numFlips - it->second.entry.lastUsedFrame >= age) {
+			kernelMemory.Free(it->second.ptr);
+			it = textDrawerImages.erase(it);
+		} else {
+			++it;
+		}
+	}
+}
+
 void PPGeDrawText(const char *text, float x, float y, const PPGeStyle &style) {
 	if (!text || !strlen(text)) {
 		return;
@@ -913,8 +931,10 @@ void PPGeDrawText(const char *text, float x, float y, const PPGeStyle &style) {
 
 	if (HasTextDrawer()) {
 		PPGeTextDrawerImage im = PPGeGetTextImage(text, style, 480.0f - x, false);
-		PPGeDrawTextImage(im, x, y, style);
-		return;
+		if (im.ptr) {
+			PPGeDrawTextImage(im, x, y, style);
+			return;
+		}
 	}
 
 	if (style.hasShadow) {
@@ -957,6 +977,7 @@ void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, fl
 	}
 
 	int zoom = (PSP_CoreParameter().pixelHeight + 479) / 480;
+	zoom = std::min(zoom, PSP_CoreParameter().renderScaleFactor);
 	float maxScaleDown = zoom == 1 ? 1.3f : 2.0f;
 
 	if (HasTextDrawer()) {
@@ -987,8 +1008,10 @@ void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, fl
 		}
 
 		PPGeTextDrawerImage im = PPGeGetTextImage(s.c_str(), adjustedStyle, wrapWidth <= 0 ? 480.0f - x : wrapWidth, true);
-		PPGeDrawTextImage(im, x, y, adjustedStyle);
-		return;
+		if (im.ptr) {
+			PPGeDrawTextImage(im, x, y, adjustedStyle);
+			return;
+		}
 	}
 
 	int sx = style.hasShadow ? 1 : 0;
@@ -1299,15 +1322,6 @@ void PPGeNotifyFrame() {
 		textDrawer->OncePerFrame();
 	}
 
-	// Do this always, in case the platform has no TextDrawer but save state did.
-	for (auto it = textDrawerImages.begin(); it != textDrawerImages.end(); ) {
-		if (it->second.entry.lastUsedFrame - gpuStats.numFlips >= 97) {
-			kernelMemory.Free(it->second.ptr);
-			it = textDrawerImages.erase(it);
-		} else {
-			++it;
-		}
-	}
-
+	PPGeDecimateTextImages();
 	PPGeImage::Decimate();
 }

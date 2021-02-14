@@ -60,6 +60,8 @@ uint16_t portOffset;
 uint32_t minSocketTimeoutUS;
 uint32_t fakePoolSize                 = 0;
 SceNetAdhocMatchingContext * contexts = NULL;
+char* dummyPeekBuf64k                 = NULL;
+int dummyPeekBuf64kSize               = 65536;
 int one                               = 1;
 bool friendFinderRunning              = false;
 SceNetAdhocctlPeerInfo * friends      = NULL;
@@ -128,16 +130,19 @@ bool isPDPPortInUse(uint16_t port) {
 	return false;
 }
 
-bool isPTPPortInUse(uint16_t port, bool forListen) {
+bool isPTPPortInUse(uint16_t port, bool forListen, SceNetEtherAddr* dstmac, uint16_t dstport) {
 	// Iterate Sockets
 	for (int i = 0; i < MAX_SOCKET; i++) {
 		auto sock = adhocSockets[i];
 		if (sock != NULL && sock->type == SOCK_PTP)
-			// It's allowed to Listen and Open the same PTP port, But it's not allowed to Listen or Open the same PTP port twice.
-			if (sock->data.ptp.lport == port && 
-				((forListen && sock->data.ptp.state == ADHOC_PTP_STATE_LISTEN) || 
-				(!forListen && sock->data.ptp.state != ADHOC_PTP_STATE_LISTEN)))
+			// It's allowed to Listen and Open the same PTP port, But it's not allowed to Listen or Open the same PTP port twice (unless destination mac or port are different).
+			if (sock->data.ptp.lport == port &&
+			    ((forListen && sock->data.ptp.state == ADHOC_PTP_STATE_LISTEN) ||
+			     (!forListen && sock->data.ptp.state != ADHOC_PTP_STATE_LISTEN && 
+			      sock->data.ptp.pport == dstport && dstmac != nullptr && isMacMatch(&sock->data.ptp.paddr, dstmac)))) 
+			{
 				return true;
+			}
 	}
 	// Unused Port
 	return false;
@@ -1136,18 +1141,18 @@ void AfterMatchingMipsCall::SetData(int ContextID, int eventId, u32_le BufAddr) 
 
 bool SetMatchingInCallback(SceNetAdhocMatchingContext* context, bool IsInCB) {
 	if (context == NULL) return false;
-	context->eventlock->lock(); //peerlock.lock();
+	peerlock.lock();
 	context->IsMatchingInCB = IsInCB;
-	context->eventlock->unlock(); //peerlock.unlock();
+	peerlock.unlock();
 	return IsInCB;
 }
 
 bool IsMatchingInCallback(SceNetAdhocMatchingContext* context) {
 	bool inCB = false;
 	if (context == NULL) return inCB;
-	context->eventlock->lock(); //peerlock.lock();
+	peerlock.lock();
 	inCB = (context->IsMatchingInCB);
-	context->eventlock->unlock(); //peerlock.unlock();
+	peerlock.unlock();
 	return inCB;
 }
 
@@ -1893,13 +1898,20 @@ uint16_t getLocalPort(int sock) {
 	return ntohs(localAddr.sin_port);
 }
 
-u_long getAvailToRecv(int sock) {
+u_long getAvailToRecv(int sock, int udpBufferSize) {
 	u_long n = 0; // Typical MTU size is 1500
+	int err = -1;
 #if defined(_WIN32) // May not be available on all platform
-	ioctlsocket(sock, FIONREAD, &n);
+	err = ioctlsocket(sock, FIONREAD, &n);
 #else
-	ioctl(sock, FIONREAD, &n);
+	err = ioctl(sock, FIONREAD, &n);
 #endif
+	if (err < 0)
+		return 0;
+
+	if (udpBufferSize > 0 && n > 0) {
+		// TODO: Cap number of bytes of full DGRAM message(s) up to buffer size, but may cause Warriors Orochi 2 to get FPS drops
+	}
 	return n;
 }
 

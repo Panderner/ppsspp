@@ -181,7 +181,7 @@ void CheckGLExtensions() {
 			// Just for reference: Galaxy Y has renderer == "VideoCore IV HW"
 		} else if (vendor == "Vivante Corporation") {
 			gl_extensions.gpuVendor = GPU_VENDOR_VIVANTE;
-		} else if (vendor == "Apple Inc.") {
+		} else if (vendor == "Apple Inc." || vendor == "Apple") {
 			gl_extensions.gpuVendor = GPU_VENDOR_APPLE;
 		} else {
 			WARN_LOG(G3D, "Unknown GL vendor: '%s'", vendor.c_str());
@@ -594,6 +594,8 @@ std::string ApplyGLSLPrelude(const std::string &source, uint32_t stage) {
 	if (!gl_extensions.IsGLES && gl_extensions.IsCoreContext) {
 		// We need to add a corresponding #version.  Apple drivers fail without an exact match.
 		version = StringFromFormat("#version %d\n", gl_extensions.GLSLVersion());
+	} else if (gl_extensions.IsGLES && gl_extensions.GLES3) {
+		version = StringFromFormat("#version %d es\n", gl_extensions.GLSLVersion());
 	}
 	if (stage == GL_FRAGMENT_SHADER) {
 		temp = version + glsl_fragment_prelude + source;
